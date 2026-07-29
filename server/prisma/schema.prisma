@@ -329,18 +329,17 @@ model PortfolioRegimeShiftAlert {
 
 // ── Durable Event Archive Models (Issue #75) ─────────────────────────────────
 
-/**
- * Immutable manifest for a single archive partition.
- *
- * Lifecycle: STAGED → VERIFIED → HOT_ROWS_DELETED
- *   STAGED           — object written to storage, hot rows not yet deleted
- *   VERIFIED         — count, ordering, digest, and sample equivalence confirmed
- *   HOT_ROWS_DELETED — hot Event rows covered by this archive have been purged
- *   QUARANTINED      — integrity failure detected; hot rows preserved for recovery
- *   LEGAL_HOLD       — deletion blocked by a LegalHold record
- *   TOMBSTONE        — permanently deleted (retention expired)
- *   RESTORING        — cold object being copied back to hot Event table
- */
+//
+// Immutable manifest for a single archive partition.
+//
+// Lifecycle: STAGED → VERIFIED → HOT_ROWS_DELETED
+//   STAGED           — object written to storage, hot rows not yet deleted
+//   VERIFIED         — count, ordering, digest, and sample equivalence confirmed
+//   HOT_ROWS_DELETED — hot Event rows covered by this archive have been purged
+//   QUARANTINED      — integrity failure detected; hot rows preserved for recovery
+//   LEGAL_HOLD       — deletion blocked by a LegalHold record
+//   TOMBSTONE        — permanently deleted (retention expired)
+//   RESTORING        — cold object being copied back to hot Event table
 model EventArchiveManifest {
   id                  String   @id @default(uuid())
   // Partition identity
@@ -389,10 +388,9 @@ model EventArchiveManifest {
   @@index([contentAddress])
 }
 
-/**
- * Active distributed lock used to prevent two workers from archiving
- * the same partition concurrently.
- */
+//
+// Active distributed lock used to prevent two workers from archiving
+// the same partition concurrently.
 model ArchiveWorkerLock {
   id          String   @id // partition key: "<network>:<contractId>:<ledgerStart>:<ledgerEnd>"
   workerId    String
@@ -402,10 +400,9 @@ model ArchiveWorkerLock {
   @@index([expiresAt])
 }
 
-/**
- * Retention policy per (network, contractId) pair.
- * Overrides the global default when present.
- */
+//
+// Retention policy per (network, contractId) pair.
+// Overrides the global default when present.
 model ArchiveRetentionPolicy {
   id                  String   @id @default(uuid())
   network             String
@@ -421,9 +418,8 @@ model ArchiveRetentionPolicy {
   @@unique([network, contractId])
 }
 
-/**
- * Legal hold: blocks deletion of a manifest until the hold is released.
- */
+//
+// Legal hold: blocks deletion of a manifest until the hold is released.
 model LegalHold {
   id          String   @id @default(uuid())
   manifestId  String
