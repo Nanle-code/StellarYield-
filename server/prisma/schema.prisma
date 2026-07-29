@@ -166,6 +166,31 @@ model Incident {
 
 // ── Drift Detection Models ──────────────────────────────────────────────────
 
+model ProtocolCompatibilityObservation {
+  id                  String   @id @default(uuid())
+  protocolName        String
+  version             String
+  network             String
+  contractId          String
+  observedSpecHash    String
+  observedWasmHash    String
+  state               String
+  ledger              Int
+  source              String
+  capabilities        Json
+  safeUnwindAvailable Boolean
+  manifestVersion     String
+  expectedSpecHash    String
+  expectedWasmHash    String
+  errors              Json
+  checkedAt           DateTime
+  createdAt           DateTime @default(now())
+
+  @@index([protocolName, checkedAt])
+  @@index([protocolName, state])
+  @@index([contractId, observedSpecHash])
+}
+
 model DriftEvent {
   id              String   @id @default(uuid())
   vaultId         String
