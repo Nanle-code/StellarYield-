@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, symbol_short, Address, Env, Symbol, Val, Vec,
+    contract, contracterror, contractimpl, symbol_short, Address, BytesN, Env, String, Symbol, Val,
+    Vec,
 };
 
 mod storage;
@@ -9,7 +10,16 @@ mod storage;
 #[cfg(test)]
 mod test;
 
-use storage::{DataKey, Proposal, ProposalStatus};
+use storage::{DataKey, Proposal, ProposalStatus, UpgradeDataKey};
+
+// ── Upgrade / Migration Framework ───────────────────────────────────────
+
+pub const CONTRACT_NAME: &str = "optimistic_governance";
+pub const STORAGE_VERSION: u32 = 1;
+
+#[path = "../../interfaces/upgrade_impl.rs"]
+pub mod upgrade_impl;
+use upgrade_impl::{MigrationChunk, MigrationState};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -24,9 +34,28 @@ pub enum Error {
     ProposalAlreadyExecuted = 7,
     InsufficientVotingPower = 8,
     ChallengeWindowExpired = 9,
+    ActionNotAllowed = 10,
+    ProposalExpired = 11,
+    ProposalCancelled = 12,
+    ProposalNotExecutable = 13,
+    TimelockActive = 14,
+    // Upgrade & migration errors
+    UpgradeNotFound = 3001,
+    UpgradeNotScheduled = 3002,
+    WasmHashMismatch = 3003,
+    UpgradeProposalExpired = 3004,
+    MigrationInProgress = 3005,
+    MigrationNotStarted = 3006,
+    MigrationComplete = 3007,
+    InvalidMigrationEdge = 3008,
 }
 
-// Interface for ve_tokenomics (veYIELD)
+impl From<Error> for u32 {
+    fn from(e: Error) -> u32 {
+        e as u32
+    }
+}
+
 mod ve_yield {
     use soroban_sdk::{contractclient, Address, Env};
 
@@ -42,7 +71,6 @@ pub struct OptimisticGovernance;
 
 #[contractimpl]
 impl OptimisticGovernance {
-    /// Initialize the contract with an admin and the ve_tokenomics address.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -62,25 +90,97 @@ impl OptimisticGovernance {
             .set(&DataKey::ChallengeWindow, &challenge_window);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
         env.storage().instance().set(&DataKey::IsInitialized, &true);
+        env.storage()
+            .instance()
+            .set(&UpgradeDataKey::StorageVersion, &STORAGE_VERSION);
+
+        let wasm_hash: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
+        env.storage()
+            .instance()
+            .set(&UpgradeDataKey::CurrentWasmHash, &wasm_hash);
 
         Ok(())
     }
 
-    /// Submit a proposal with a payload to be executed after the challenge window.
+    pub fn allow_action(
+        env: Env,
+        caller: Address,
+        contract_id: Address,
+        function: Symbol,
+    ) -> Result<(), Error> {
+        Self::require_init(&env)?;
+        Self::require_operational(&env)?;
+        caller.require_auth();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedAction(contract_id, function), &true);
+
+        Ok(())
+    }
+
+    pub fn revoke_action(
+        env: Env,
+        caller: Address,
+        contract_id: Address,
+        function: Symbol,
+    ) -> Result<(), Error> {
+        Self::require_init(&env)?;
+        Self::require_operational(&env)?;
+        caller.require_auth();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedAction(contract_id, function));
+
+        Ok(())
+    }
+
+    pub fn is_action_allowed(env: Env, contract_id: Address, function: Symbol) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowedAction(contract_id, function))
+            .unwrap_or(false)
+    }
+
     pub fn propose(
         env: Env,
         proposer: Address,
         contract_id: Address,
         function: Symbol,
         args: Vec<Val>,
+        action_hash: BytesN<32>,
+        expiry_window: u64,
     ) -> Result<u64, Error> {
         Self::require_init(&env)?;
+        Self::require_operational(&env)?;
         proposer.require_auth();
 
-        // Check if proposer is admin
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if proposer != admin {
             return Err(Error::Unauthorized);
+        }
+
+        let allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedAction(
+                contract_id.clone(),
+                function.clone(),
+            ))
+            .unwrap_or(false);
+        if !allowed {
+            return Err(Error::ActionNotAllowed);
         }
 
         let count: u64 = env
@@ -96,6 +196,7 @@ impl OptimisticGovernance {
             .get(&DataKey::ChallengeWindow)
             .unwrap();
         let execution_time = env.ledger().timestamp() + challenge_window;
+        let expiry_time = execution_time + expiry_window;
 
         let proposal = Proposal {
             id: proposal_id,
@@ -103,7 +204,9 @@ impl OptimisticGovernance {
             contract_id,
             function,
             args,
+            action_hash: action_hash.clone(),
             execution_time,
+            expiry_time,
             status: ProposalStatus::Pending,
         };
 
@@ -116,16 +219,15 @@ impl OptimisticGovernance {
 
         env.events().publish(
             (symbol_short!("propose"), proposer),
-            (proposal_id, execution_time),
+            (proposal_id, execution_time, action_hash),
         );
 
         Ok(proposal_id)
     }
 
-    /// Dispute a proposal, freezing its execution.
-    /// Requires non-zero veYIELD voting power.
     pub fn dispute(env: Env, disputer: Address, proposal_id: u64) -> Result<(), Error> {
         Self::require_init(&env)?;
+        Self::require_operational(&env)?;
         disputer.require_auth();
 
         let mut proposal: Proposal = env
@@ -143,7 +245,6 @@ impl OptimisticGovernance {
             return Err(Error::ChallengeWindowExpired);
         }
 
-        // Check veYIELD voting power
         let ve_yield_token: Address = env
             .storage()
             .instance()
@@ -156,7 +257,7 @@ impl OptimisticGovernance {
             return Err(Error::InsufficientVotingPower);
         }
 
-        proposal.status = ProposalStatus::Disputed;
+        proposal.status = ProposalStatus::Challenged;
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
@@ -167,9 +268,20 @@ impl OptimisticGovernance {
         Ok(())
     }
 
-    /// Execute a proposal after the challenge window expires, if not disputed.
-    pub fn execute(env: Env, proposal_id: u64) -> Result<Val, Error> {
+    pub fn resolve_dispute(
+        env: Env,
+        caller: Address,
+        proposal_id: u64,
+        reinstate: bool,
+    ) -> Result<(), Error> {
         Self::require_init(&env)?;
+        Self::require_operational(&env)?;
+        caller.require_auth();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
 
         let mut proposal: Proposal = env
             .storage()
@@ -177,12 +289,84 @@ impl OptimisticGovernance {
             .get(&DataKey::Proposal(proposal_id))
             .ok_or(Error::ProposalNotFound)?;
 
-        if proposal.status == ProposalStatus::Disputed {
-            return Err(Error::ProposalDisputed);
+        if proposal.status != ProposalStatus::Challenged {
+            return Err(Error::ProposalNotFound);
+        }
+
+        if reinstate {
+            let challenge_window: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::ChallengeWindow)
+                .unwrap();
+            let execution_time = env.ledger().timestamp() + challenge_window;
+            proposal.execution_time = execution_time;
+            proposal.status = ProposalStatus::Pending;
+        } else {
+            proposal.status = ProposalStatus::Cancelled;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events()
+            .publish((symbol_short!("resolve"), proposal_id), (reinstate,));
+
+        Ok(())
+    }
+
+    pub fn cancel(env: Env, caller: Address, proposal_id: u64) -> Result<(), Error> {
+        Self::require_init(&env)?;
+        Self::require_operational(&env)?;
+        caller.require_auth();
+
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != admin && caller != proposal.proposer {
+            return Err(Error::Unauthorized);
         }
 
         if proposal.status == ProposalStatus::Executed {
             return Err(Error::ProposalAlreadyExecuted);
+        }
+        if proposal.status == ProposalStatus::Cancelled {
+            return Err(Error::ProposalCancelled);
+        }
+
+        proposal.status = ProposalStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events()
+            .publish((symbol_short!("cancel"), proposal_id), ());
+
+        Ok(())
+    }
+
+    pub fn execute(env: Env, proposal_id: u64) -> Result<Val, Error> {
+        Self::require_init(&env)?;
+        Self::require_operational(&env)?;
+
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
+
+        match proposal.status {
+            ProposalStatus::Challenged => return Err(Error::ProposalDisputed),
+            ProposalStatus::Executed => return Err(Error::ProposalAlreadyExecuted),
+            ProposalStatus::Cancelled => return Err(Error::ProposalCancelled),
+            ProposalStatus::Expired => return Err(Error::ProposalExpired),
+            ProposalStatus::Failed => return Err(Error::ProposalNotExecutable),
+            ProposalStatus::Pending | ProposalStatus::Executable => {}
         }
 
         let current_time = env.ledger().timestamp();
@@ -190,7 +374,30 @@ impl OptimisticGovernance {
             return Err(Error::ChallengeWindowActive);
         }
 
-        // Execute the payload
+        if current_time > proposal.expiry_time {
+            proposal.status = ProposalStatus::Expired;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Proposal(proposal_id), &proposal);
+            return Err(Error::ProposalExpired);
+        }
+
+        let allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedAction(
+                proposal.contract_id.clone(),
+                proposal.function.clone(),
+            ))
+            .unwrap_or(false);
+        if !allowed {
+            proposal.status = ProposalStatus::Failed;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Proposal(proposal_id), &proposal);
+            return Err(Error::ActionNotAllowed);
+        }
+
         let result: Val = env.invoke_contract(
             &proposal.contract_id,
             &proposal.function,
@@ -204,7 +411,11 @@ impl OptimisticGovernance {
 
         env.events().publish(
             (symbol_short!("execute"), proposal_id),
-            (proposal.contract_id, proposal.function),
+            (
+                proposal.contract_id,
+                proposal.function,
+                proposal.action_hash,
+            ),
         );
 
         Ok(result)
@@ -225,11 +436,83 @@ impl OptimisticGovernance {
             .unwrap_or(0)
     }
 
+    // ── Upgrade & Migration ───────────────────────────────────────
+
+    pub fn contract_version(env: Env) -> String {
+        upgrade_impl::contract_version(&env)
+    }
+
+    pub fn storage_version(env: Env) -> u32 {
+        upgrade_impl::storage_version(&env)
+    }
+
+    pub fn upgrade(
+        env: Env,
+        governance: Address,
+        target_wasm_hash: BytesN<32>,
+        migration_plan_digest: BytesN<32>,
+        migration_id: String,
+        timelock_seconds: u64,
+    ) -> Result<u64, Error> {
+        upgrade_impl::schedule_upgrade(
+            &env,
+            &governance,
+            target_wasm_hash,
+            migration_plan_digest,
+            migration_id,
+            timelock_seconds,
+        )
+    }
+
+    pub fn cancel_upgrade(env: Env, governance: Address, proposal_id: u64) -> Result<(), Error> {
+        upgrade_impl::cancel_upgrade(&env, &governance, proposal_id)
+    }
+
+    pub fn execute_upgrade(env: Env, governance: Address, proposal_id: u64) -> Result<(), Error> {
+        upgrade_impl::execute_upgrade(&env, &governance, proposal_id)
+    }
+
+    pub fn finalize_upgrade(env: Env, proposal_id: u64) -> Result<(), Error> {
+        upgrade_impl::finalize_upgrade(&env, proposal_id)
+    }
+
+    pub fn migrate(
+        env: Env,
+        from_version: u32,
+        to_version: u32,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<MigrationChunk, Error> {
+        if from_version == 0 {
+            upgrade_impl::start_migration(&env, from_version, to_version)?;
+        }
+        upgrade_impl::advance_migration(&env, cursor, limit)
+    }
+
+    pub fn complete_migration(env: Env) -> Result<(), Error> {
+        upgrade_impl::complete_migration(&env)
+    }
+
+    pub fn migration_status(env: Env) -> Option<MigrationState> {
+        upgrade_impl::migration_status(&env)
+    }
+
+    pub fn is_migrating(env: Env) -> bool {
+        upgrade_impl::is_migrating(&env)
+    }
+
     // ── Internal Helpers ──────────────────────────────────────────
 
     fn require_init(env: &Env) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::IsInitialized) {
             return Err(Error::NotInitialized);
+        }
+        Ok(())
+    }
+
+    fn require_operational(env: &Env) -> Result<(), Error> {
+        if upgrade_impl::is_migrating(env) {
+            return Err(Error::MigrationInProgress);
         }
         Ok(())
     }
