@@ -319,6 +319,117 @@ model PortfolioRegimeShiftAlert {
   @@index([walletAddress, currentRegime, createdAt])
 }
 
+// ── Durable Event Archive Models (Issue #75) ─────────────────────────────────
+
+/**
+ * Immutable manifest for a single archive partition.
+ *
+ * Lifecycle: STAGED → VERIFIED → HOT_ROWS_DELETED
+ *   STAGED           — object written to storage, hot rows not yet deleted
+ *   VERIFIED         — count, ordering, digest, and sample equivalence confirmed
+ *   HOT_ROWS_DELETED — hot Event rows covered by this archive have been purged
+ *   QUARANTINED      — integrity failure detected; hot rows preserved for recovery
+ *   LEGAL_HOLD       — deletion blocked by a LegalHold record
+ *   TOMBSTONE        — permanently deleted (retention expired)
+ *   RESTORING        — cold object being copied back to hot Event table
+ */
+model EventArchiveManifest {
+  id                  String   @id @default(uuid())
+  // Partition identity
+  network             String
+  contractId          String
+  ledgerStart         Int
+  ledgerEnd           Int
+  schemaVersion       Int      @default(1)
+  // Object storage
+  objectKey           String   @unique
+  contentAddress      String   // SHA-256 of canonical uncompressed bytes
+  compressedDigest    String   // SHA-256 of gzip-compressed object
+  compressionAlgo     String   @default("gzip")
+  compressedBytes     BigInt
+  uncompressedBytes   BigInt
+  // Partition stats
+  eventCount          Int
+  firstEventId        String
+  lastEventId         String
+  firstLedger         Int
+  lastLedger          Int
+  // Lifecycle
+  state               String   @default("STAGED")
+  // STAGED | VERIFIED | HOT_ROWS_DELETED | QUARANTINED | LEGAL_HOLD | TOMBSTONE | RESTORING
+  stagedAt            DateTime @default(now())
+  verifiedAt          DateTime?
+  hotRowsDeletedAt    DateTime?
+  quarantinedAt       DateTime?
+  restoredAt          DateTime?
+  tombstonedAt        DateTime?
+  // Verification metadata
+  verificationPass    Boolean?
+  verificationError   String?
+  sampleCheckPassed   Boolean?
+  // Retry / recovery
+  retryCount          Int      @default(0)
+  lastError           String?
+  // Audit
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  legalHolds          LegalHold[]
+
+  @@index([network, contractId, ledgerStart, ledgerEnd])
+  @@index([state, stagedAt])
+  @@index([contentAddress])
+}
+
+/**
+ * Active distributed lock used to prevent two workers from archiving
+ * the same partition concurrently.
+ */
+model ArchiveWorkerLock {
+  id          String   @id // partition key: "<network>:<contractId>:<ledgerStart>:<ledgerEnd>"
+  workerId    String
+  acquiredAt  DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+}
+
+/**
+ * Retention policy per (network, contractId) pair.
+ * Overrides the global default when present.
+ */
+model ArchiveRetentionPolicy {
+  id                  String   @id @default(uuid())
+  network             String
+  contractId          String
+  retentionDays       Int
+  partitionStrategy   String   @default("monthly")
+  // daily | weekly | monthly
+  compressionEnabled  Boolean  @default(true)
+  batchSize           Int      @default(10000)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([network, contractId])
+}
+
+/**
+ * Legal hold: blocks deletion of a manifest until the hold is released.
+ */
+model LegalHold {
+  id          String   @id @default(uuid())
+  manifestId  String
+  reason      String
+  createdBy   String
+  createdAt   DateTime @default(now())
+  releasedAt  DateTime?
+  releasedBy  String?
+
+  manifest    EventArchiveManifest @relation(fields: [manifestId], references: [id])
+
+  @@index([manifestId])
+}
+
 // ── Allocation Provenance Models ──────────────────────────────────────────────
 
 model AllocationProvenance {
