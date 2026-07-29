@@ -248,6 +248,76 @@ model RebalanceHistory {
 
 // ── Strategy Snapshot Models (Issue #282) ────────────────────────────────────
 
+// Durable exactly-once execution coordinator records (Issue #79)
+model ExecutionRecord {
+  intentId            String   @id
+  intentHash          String   @unique
+  vaultId             String
+  operation           String
+  state               String   @default("READY")
+  // READY, LEASED, BUILT, SIMULATED, SIGNED, SUBMITTED, CONFIRMED, FAILED, EXPIRED, RECONCILING
+
+  fencingToken        BigInt   @default(0)
+  leaseOwner          String?
+  leaseExpiresAt      DateTime?
+
+  sourceAccount       String?
+  reservedSequence    BigInt?
+  unsignedXdr         String?
+  simulatedXdr        String?
+  signedEnvelopeHash  String?
+  submissionHash      String?
+  latestRpcStatus     String?
+  validUntilLedger    BigInt?
+  resultXdr           String?
+  retryClass          String?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([vaultId, state])
+  @@index([state, leaseExpiresAt])
+  @@index([sourceAccount, reservedSequence])
+  @@index([submissionHash])
+}
+
+model ExecutionSequenceReservation {
+  id              String   @id @default(uuid())
+  sourceAccount   String
+  sequence        BigInt
+  intentId        String
+  fencingToken    BigInt
+  reservedUntil   DateTime
+  createdAt       DateTime @default(now())
+
+  @@unique([sourceAccount, sequence])
+  @@index([intentId])
+  @@index([reservedUntil])
+}
+
+model ExecutionOutbox {
+  id            String   @id @default(uuid())
+  aggregateId   String
+  topic         String
+  payload       Json
+  publishedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([aggregateId, createdAt])
+  @@index([topic, publishedAt])
+}
+
+model ExecutionInbox {
+  id          String   @id @default(uuid())
+  messageId   String
+  consumer    String
+  intentId    String
+  processedAt DateTime @default(now())
+
+  @@unique([messageId, consumer])
+  @@index([intentId])
+}
+
 model StrategySnapshot {
   id                  String   @id @default(uuid())
   strategyId          String
