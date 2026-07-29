@@ -49,7 +49,11 @@ export interface ArchiveStorage {
 export class InMemoryArchiveStorage implements ArchiveStorage {
   private store = new Map<string, Buffer>();
 
-  async put(key: string, body: Buffer): Promise<void> {
+  async put(
+    key: string,
+    body: Buffer,
+    _meta?: { contentType: string; contentEncoding: string }
+  ): Promise<void> {
     this.store.set(key, body);
   }
 
