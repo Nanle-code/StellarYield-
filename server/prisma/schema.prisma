@@ -24,6 +24,109 @@ model IndexerState {
   lastLedger      Int
 }
 
+model IndexerContractStream {
+  id                  String   @id @default(uuid())
+  network             String
+  contractId          String
+  rpcUrl              String
+  networkPassphrase   String
+  contractType        String   @default("unknown")
+  deploymentLedger    Int      @default(0)
+  specVersion         Int      @default(1)
+  decoderVersion      Int      @default(1)
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([network, contractId])
+  @@index([enabled, network])
+}
+
+model IndexerCheckpoint {
+  id                    String    @id @default(uuid())
+  network               String
+  contractId            String
+  networkPassphrase     String
+  lastLedger            Int       @default(0)
+  cursor                String?
+  lastSuccessfulBatchAt DateTime?
+  eventsProcessed       Int       @default(0)
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([network, contractId])
+  @@index([network, lastLedger])
+}
+
+model RawSorobanEvent {
+  id            String   @id
+  identity      String   @unique
+  network       String
+  contractId    String
+  ledger        Int
+  txHash        String
+  eventIndex    Int
+  pagingToken   String?
+  topic         String
+  data          String
+  envelopeJson  Json
+  createdAt     DateTime @default(now())
+
+  decodedEvents DecodedSorobanEvent[]
+  deadLetters   IndexerDeadLetter[]
+
+  @@unique([network, contractId, ledger, txHash, eventIndex])
+  @@index([network, contractId, ledger])
+  @@index([pagingToken])
+}
+
+model DecodedSorobanEvent {
+  id                String   @id @default(uuid())
+  rawEventId        String
+  network           String
+  contractId        String
+  ledger            Int
+  eventType         String
+  projectorVersion  Int      @default(1)
+  payloadJson       Json
+  projectedAt       DateTime @default(now())
+
+  rawEvent          RawSorobanEvent @relation(fields: [rawEventId], references: [id], onDelete: Cascade)
+
+  @@unique([rawEventId, projectorVersion])
+  @@index([network, contractId, eventType, ledger])
+}
+
+model IndexerDeadLetter {
+  id            String   @id @default(uuid())
+  rawEventId    String?
+  network       String
+  contractId    String
+  ledger        Int?
+  reason        String
+  errorMessage  String
+  payloadJson   Json?
+  resolvedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  rawEvent      RawSorobanEvent? @relation(fields: [rawEventId], references: [id], onDelete: SetNull)
+
+  @@index([network, contractId, createdAt])
+  @@index([resolvedAt])
+}
+
+model ProjectionVersion {
+  id                String   @id @default(uuid())
+  projectorName     String
+  projectorVersion  Int
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  status            String   @default("RUNNING")
+  lastLedger        Int?
+  errorMessage      String?
+
+  @@unique([projectorName, projectorVersion])
+}
+
 model VaultBalance {
   id              String   @id @default(uuid())
   walletAddress   String   @unique
