@@ -219,6 +219,12 @@ describe('Compound Math Utilities', () => {
       expect(errors).toContain('Time horizon exceeds maximum limit');
     });
 
+    it('should detect NaN time horizon', () => {
+      const config = { ...defaultConfig, years: NaN };
+      const errors = validateConfig(config);
+      expect(errors).toContain('Time horizon must be at least 1 year');
+    });
+
     it('should detect multiple errors', () => {
       const config = {
         principal: -100,
