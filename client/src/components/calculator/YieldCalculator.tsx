@@ -69,13 +69,25 @@ function timeframeForYears(years: number): '1' | '5' | '10' {
   return '1';
 }
 
-export default function YieldCalculator() {
-  const [principal, setPrincipal] = useState(10000);
-  const [monthlyContribution, setMonthlyContribution] = useState(500);
-  const [apy, setApy] = useState(8.5);
-  const [years, setYears] = useState(5);
+export interface YieldCalculatorProps {
+  initialPrincipal?: number;
+  initialMonthlyContribution?: number;
+  initialApy?: number;
+  initialYears?: number;
+}
+
+export default function YieldCalculator({
+  initialPrincipal = 10000,
+  initialMonthlyContribution = 500,
+  initialApy = 8.5,
+  initialYears = 5,
+}: YieldCalculatorProps = {}) {
+  const [principal, setPrincipal] = useState(initialPrincipal);
+  const [monthlyContribution, setMonthlyContribution] = useState(initialMonthlyContribution);
+  const [apy, setApy] = useState(initialApy);
+  const [years, setYears] = useState(initialYears);
   const [showTooltip, setShowTooltip] = useState(false);
-  const [selectedTimeframe, setSelectedTimeframe] = useState<'1' | '5' | '10'>('5');
+  const [selectedTimeframe, setSelectedTimeframe] = useState<'1' | '5' | '10'>(() => timeframeForYears(initialYears));
 
   const config: CompoundConfig = useMemo(() => ({
     principal,

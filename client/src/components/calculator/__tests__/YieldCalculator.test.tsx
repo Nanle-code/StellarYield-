@@ -185,20 +185,49 @@ describe('YieldCalculator Component', () => {
     });
   });
 
-  it('should show error state for invalid inputs', async () => {
-    const { container } = render(<YieldCalculator />);
+  it('should show error state for invalid initial deposit', () => {
+    render(<YieldCalculator initialPrincipal={-1000} />);
     
-    // Try to set an invalid value through direct DOM manipulation
-    // (In real usage, sliders prevent this, but we test the error handling)
-    const principalInput = container.querySelector('input[type="range"]');
+    expect(screen.getByText('Please correct the following errors:')).toBeInTheDocument();
+    expect(screen.getByText('Initial deposit cannot be negative')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Final Value')).not.toBeInTheDocument();
+  });
+
+  it('should show error state for invalid duration (less than 1 year) with no NaN displayed', () => {
+    render(<YieldCalculator initialYears={0} />);
     
-    if (principalInput) {
-      // Simulate validation error by triggering state update
-      fireEvent.change(principalInput, { target: { value: '-1000' } });
-    }
+    expect(screen.getByText('Please correct the following errors:')).toBeInTheDocument();
+    expect(screen.getByText('Time horizon must be at least 1 year')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Final Value')).not.toBeInTheDocument();
+  });
+
+  it('should show error state for negative duration with no NaN displayed', () => {
+    render(<YieldCalculator initialYears={-5} />);
     
-    // Component should still render without crashing
-    expect(container.querySelector('h2')).toHaveTextContent('Yield Calculator');
+    expect(screen.getByText('Please correct the following errors:')).toBeInTheDocument();
+    expect(screen.getByText('Time horizon must be at least 1 year')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Final Value')).not.toBeInTheDocument();
+  });
+
+  it('should show error state for invalid duration exceeding maximum limit with no NaN displayed', () => {
+    render(<YieldCalculator initialYears={55} />);
+    
+    expect(screen.getByText('Please correct the following errors:')).toBeInTheDocument();
+    expect(screen.getByText('Time horizon exceeds maximum limit')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Final Value')).not.toBeInTheDocument();
+  });
+
+  it('should show error state when duration is NaN with no NaN displayed', () => {
+    render(<YieldCalculator initialYears={NaN} />);
+    
+    expect(screen.getByText('Please correct the following errors:')).toBeInTheDocument();
+    expect(screen.getByText('Time horizon must be at least 1 year')).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Final Value')).not.toBeInTheDocument();
   });
 
   it('should have proper accessibility attributes', () => {

@@ -179,35 +179,27 @@ export function formatPercentage(value: number, decimals: number = 2): string {
 export function validateConfig(config: CompoundConfig): string[] {
   const errors: string[] = [];
   
-  if (config.principal < 0) {
+  if (typeof config.principal !== 'number' || Number.isNaN(config.principal) || !Number.isFinite(config.principal) || config.principal < 0) {
     errors.push('Initial deposit cannot be negative');
-  }
-  
-  if (config.principal > 1000000000) {
+  } else if (config.principal > 1000000000) {
     errors.push('Initial deposit exceeds maximum limit');
   }
   
-  if (config.apy < 0) {
+  if (typeof config.apy !== 'number' || Number.isNaN(config.apy) || !Number.isFinite(config.apy) || config.apy < 0) {
     errors.push('APY cannot be negative');
-  }
-  
-  if (config.apy > 1000) {
+  } else if (config.apy > 1000) {
     errors.push('APY exceeds reasonable maximum');
   }
   
-  if (config.monthlyContribution < 0) {
+  if (typeof config.monthlyContribution !== 'number' || Number.isNaN(config.monthlyContribution) || !Number.isFinite(config.monthlyContribution) || config.monthlyContribution < 0) {
     errors.push('Monthly contribution cannot be negative');
-  }
-  
-  if (config.monthlyContribution > 1000000) {
+  } else if (config.monthlyContribution > 1000000) {
     errors.push('Monthly contribution exceeds maximum limit');
   }
   
-  if (config.years < 1) {
+  if (typeof config.years !== 'number' || Number.isNaN(config.years) || !Number.isFinite(config.years) || config.years < 1) {
     errors.push('Time horizon must be at least 1 year');
-  }
-  
-  if (config.years > 50) {
+  } else if (config.years > 50) {
     errors.push('Time horizon exceeds maximum limit');
   }
   
