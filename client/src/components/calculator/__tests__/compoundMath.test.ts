@@ -48,18 +48,6 @@ describe('Compound Math Utilities', () => {
       expect(final.compoundValue).toBeGreaterThan(10000);
     });
 
-    it('should handle zero initial principal', () => {
-      const config = { ...defaultConfig, principal: 0 };
-      const projections = calculateCompoundProjection(config);
-      
-      expect(projections).toHaveLength(61);
-      expect(projections[0].compoundValue).toBe(0);
-      
-      const final = projections[projections.length - 1];
-      expect(final.compoundValue).toBeGreaterThan(0);
-      expect(final.totalContributions).toBe(500 * 5 * 12);
-    });
-
     it('should handle 1 year projection', () => {
       const config = { ...defaultConfig, years: 1 };
       const projections = calculateCompoundProjection(config);
@@ -240,6 +228,78 @@ describe('Compound Math Utilities', () => {
       };
       const errors = validateConfig(config);
       expect(errors.length).toBeGreaterThan(3);
+    });
+  });
+
+  describe('zero principal', () => {
+    const zeroPrincipalConfig: CompoundConfig = {
+      principal: 0,
+      apy: 8.5,
+      monthlyContribution: 500,
+      years: 5,
+    };
+
+    it('starts at zero and grows only from monthly contributions', () => {
+      const projections = calculateCompoundProjection(zeroPrincipalConfig);
+
+      expect(projections).toHaveLength(61);
+      expect(projections[0]).toEqual({
+        period: 0,
+        year: 0,
+        compoundValue: 0,
+        simpleValue: 0,
+        principalOnly: 0,
+        totalContributions: 0,
+        totalInterest: 0,
+      });
+
+      const final = projections[projections.length - 1];
+      expect(final.totalContributions).toBe(500 * 5 * 12);
+      expect(final.principalOnly).toBe(30000);
+      expect(final.compoundValue).toBeCloseTo(37256.040230937746, 8);
+      expect(final.totalInterest).toBeCloseTo(7256.040230937746, 8);
+      expect(final.compoundValue).toBeGreaterThan(final.totalContributions);
+    });
+
+    it('keeps all values at zero when principal and contributions are zero', () => {
+      const projections = calculateCompoundProjection({
+        principal: 0,
+        apy: 8.5,
+        monthlyContribution: 0,
+        years: 1,
+      });
+
+      expect(projections).toHaveLength(13);
+      expect(projections[0].compoundValue).toBe(0);
+      expect(projections[projections.length - 1]).toMatchObject({
+        compoundValue: 0,
+        simpleValue: 0,
+        principalOnly: 0,
+        totalContributions: 0,
+        totalInterest: 0,
+      });
+    });
+
+    it('produces deterministic metrics for zero principal input', () => {
+      const projections = calculateCompoundProjection(zeroPrincipalConfig);
+      const metrics = calculateProjectionMetrics(projections);
+
+      expect(metrics.totalContributions).toBe(30000);
+      expect(metrics.finalValue).toBeCloseTo(37256.040230937746, 8);
+      expect(metrics.totalInterest).toBeCloseTo(7256.040230937746, 8);
+      expect(metrics.totalReturnPercent).toBeCloseTo(24.186800769792484, 8);
+      expect(metrics.annualizedReturn).toBeCloseTo(4.4275497114591555, 8);
+    });
+
+    it('leaves positive principal behavior unchanged', () => {
+      const projections = calculateCompoundProjection(defaultConfig);
+
+      expect(projections[0].compoundValue).toBe(10000);
+      expect(projections[0].totalContributions).toBe(10000);
+
+      const final = projections[projections.length - 1];
+      expect(final.totalContributions).toBe(10000 + 500 * 5 * 12);
+      expect(final.compoundValue).toBeGreaterThan(final.totalContributions);
     });
   });
 
