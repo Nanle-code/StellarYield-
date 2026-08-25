@@ -2230,6 +2230,70 @@ paths:
         '403':
           description: Admin access required
 
+  /api/admin/rebalance-saga:
+    get:
+      summary: List rebalance execution sagas
+      description: >
+        Durable exactly-once execution state for each rebalance attempt, with
+        per-phase idempotency keys and retry history (Issue #184).
+      tags:
+        - Admin
+      parameters:
+        - name: vaultId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: phase
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, simulated, quoted, approved, submitted, confirmed, snapshotted, completed, failed, cancelled, requires_manual_review]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Rebalance sagas returned successfully
+        '403':
+          description: Admin access required
+
+  /api/admin/rebalance-saga/stalled:
+    get:
+      summary: List stalled rebalance sagas
+      description: Non-terminal sagas with an expired or missing lease (worker crash or relayer timeout) that recovery may act on.
+      tags:
+        - Admin
+      responses:
+        '200':
+          description: Stalled rebalance sagas returned successfully
+        '403':
+          description: Admin access required
+
+  /api/admin/rebalance-saga/{queueEntryId}:
+    get:
+      summary: Get one rebalance saga with retry history
+      tags:
+        - Admin
+      parameters:
+        - name: queueEntryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rebalance saga returned successfully
+        '403':
+          description: Admin access required
+        '404':
+          description: Rebalance saga not found
+
   /api/audit-monitoring/status:
     get:
       summary: Get audit monitoring status
